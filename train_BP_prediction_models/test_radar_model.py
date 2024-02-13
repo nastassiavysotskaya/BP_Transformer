@@ -125,8 +125,8 @@ if __name__ == "__main__":
     else:
         raise NotImplementedError("We only support Baseline and RegressionTransformer as model types currently.")
 
-
-    model.load_state_dict(torch.load(trainedModelPath + 'best_model_checkpoint.pth'))
+    trainedModel = torch.load(trainedModelPath + 'best_model_checkpoint.pth', map_location=device)
+    model.load_state_dict(trainedModel['model_state_dict'])
     model.eval()
     model.to(device)
     print("We have successfully loaded the pretrained model...", trainedModelPath + 'best_model_checkpoint.pth')
@@ -141,65 +141,64 @@ if __name__ == "__main__":
 
     testingResults = pd.DataFrame(columns=["SBP GT", "DBP GT", "SBP Pred", "DBP Pred", "SBP Diff", "DBP Diff"])
 
+    with torch.no_grad():
+        for batch in tqdm.tqdm(testDataloader):
+            inputFeatures, demographics, featuresToPredict, targets = batch
+
+            featuresToPredict = featuresToPredict.reshape(
+                [featuresToPredict.shape[0], 1, featuresToPredict.shape[1]])
+
+            sbpGT = targets[:, 0]
+            dbpGT = targets[:, 1]
 
 
-    for batch in tqdm.tqdm(testDataloader):
-        inputFeatures, demographics, featuresToPredict, targets = batch
+            # Forward pass
+            if modelType == "Baseline":
+                sbpPred, dbpPred = model(src=featuresToPredict,
+                                         demographic_features=demographics)
+            elif modelType == "RegressionTransformer":
+                sbpPred, dbpPred = model(src=inputFeatures,
+                                         tgt=featuresToPredict,
+                                         demographic_features=demographics)
+            else:
+                raise NotImplementedError(
+                    "We only support Baseline and RegressionTransformer as model types currently.")
 
-        featuresToPredict = featuresToPredict.reshape(
-            [featuresToPredict.shape[0], 1, featuresToPredict.shape[1]])
-
-        sbpGT = targets[:, 0]
-        dbpGT = targets[:, 1]
-
-
-        # Forward pass
-        if modelType == "Baseline":
-            sbpPred, dbpPred = model(src=featuresToPredict,
-                                     demographic_features=demographics)
-        elif modelType == "RegressionTransformer":
-            sbpPred, dbpPred = model(src=inputFeatures,
-                                     tgt=featuresToPredict,
-                                     demographic_features=demographics)
-        else:
-            raise NotImplementedError(
-                "We only support Baseline and RegressionTransformer as model types currently.")
-
-        sbpPred, dbpPred = sbpPred[:, 0], dbpPred[:, 0]
+            sbpPred, dbpPred = sbpPred[:, 0], dbpPred[:, 0]
 
 
 
-        # Convert to original scale
-        sbpGT_OriginalScale = SBPscaler.inverse_transform(sbpGT.reshape(-1, 1).cpu().numpy())
-        dbpGT_OriginalScale = DBPscaler.inverse_transform(dbpGT.reshape(-1, 1).cpu().numpy())
-        sbpPred_OriginalScale = SBPscaler.inverse_transform(sbpPred.reshape(-1, 1).detach().cpu().numpy())
-        dbpPred_OriginalScale = DBPscaler.inverse_transform(dbpPred.reshape(-1, 1).detach().cpu().numpy())
+            # Convert to original scale
+            sbpGT_OriginalScale = SBPscaler.inverse_transform(sbpGT.reshape(-1, 1).cpu().numpy())
+            dbpGT_OriginalScale = DBPscaler.inverse_transform(dbpGT.reshape(-1, 1).cpu().numpy())
+            sbpPred_OriginalScale = SBPscaler.inverse_transform(sbpPred.reshape(-1, 1).detach().cpu().numpy())
+            dbpPred_OriginalScale = DBPscaler.inverse_transform(dbpPred.reshape(-1, 1).detach().cpu().numpy())
 
-        sbpGT_NanMask = np.isnan(sbpGT_OriginalScale)
-        dbpGT_NanMask = np.isnan(dbpGT_OriginalScale)
-        sbpPred_NanMask = np.isnan(sbpPred_OriginalScale)
-        dbpPred_NanMask = np.isnan(dbpPred_OriginalScale)
+            sbpGT_NanMask = np.isnan(sbpGT_OriginalScale)
+            dbpGT_NanMask = np.isnan(dbpGT_OriginalScale)
+            sbpPred_NanMask = np.isnan(sbpPred_OriginalScale)
+            dbpPred_NanMask = np.isnan(dbpPred_OriginalScale)
 
-        joint_nan_mask = sbpGT_NanMask | dbpGT_NanMask | sbpPred_NanMask | dbpPred_NanMask
+            joint_nan_mask = sbpGT_NanMask | dbpGT_NanMask | sbpPred_NanMask | dbpPred_NanMask
 
-        sbpGT_OriginalScale = np.round(sbpGT_OriginalScale[~joint_nan_mask][0])
-        dbpGT_OriginalScale = np.round(dbpGT_OriginalScale[~joint_nan_mask][0])
-        sbpPred_OriginalScale = np.round(sbpPred_OriginalScale[~joint_nan_mask][0])
-        dbpPred_OriginalScale = np.round(dbpPred_OriginalScale[~joint_nan_mask][0])
+            sbpGT_OriginalScale = np.round(sbpGT_OriginalScale[~joint_nan_mask][0])
+            dbpGT_OriginalScale = np.round(dbpGT_OriginalScale[~joint_nan_mask][0])
+            sbpPred_OriginalScale = np.round(sbpPred_OriginalScale[~joint_nan_mask][0])
+            dbpPred_OriginalScale = np.round(dbpPred_OriginalScale[~joint_nan_mask][0])
 
 
-        currentResults = pd.DataFrame([{"SBP GT": sbpGT_OriginalScale,
-                                         "DBP GT": dbpGT_OriginalScale,
-                                         "SBP Pred": sbpPred_OriginalScale,
-                                         "DBP Pred": dbpPred_OriginalScale,
-                                         "SBP Diff": (sbpPred_OriginalScale - sbpGT_OriginalScale),
-                                         "DBP Diff": (dbpPred_OriginalScale - dbpGT_OriginalScale)}])
+            currentResults = pd.DataFrame([{"SBP GT": sbpGT_OriginalScale,
+                                             "DBP GT": dbpGT_OriginalScale,
+                                             "SBP Pred": sbpPred_OriginalScale,
+                                             "DBP Pred": dbpPred_OriginalScale,
+                                             "SBP Diff": (sbpPred_OriginalScale - sbpGT_OriginalScale),
+                                             "DBP Diff": (dbpPred_OriginalScale - dbpGT_OriginalScale)}])
 
-        if not os.path.exists(trainedModelPath + "testing_results.csv"):
-            testingResults.to_csv(trainedModelPath + "testing_results.csv", index=False, mode="a",
-                                  header=not os.path.isfile(trainedModelPath + "testing_results.csv"))
-        else:
-            currentResults.to_csv(trainedModelPath + "testing_results.csv", index=False, mode="a",
+            if not os.path.exists(trainedModelPath + "testing_results.csv"):
+                testingResults.to_csv(trainedModelPath + "testing_results.csv", index=False, mode="a",
+                                      header=not os.path.isfile(trainedModelPath + "testing_results.csv"))
+            else:
+                currentResults.to_csv(trainedModelPath + "testing_results.csv", index=False, mode="a",
                                   header=not os.path.isfile(trainedModelPath + "testing_results.csv"))
 
 
